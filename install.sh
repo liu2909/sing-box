@@ -159,10 +159,15 @@ install_pkg() {
     fi
 }
 
+# 定义镜像站前缀，如果失效可以随时更换
+# 常用镜像：https://mirror.ghproxy.com/ 或 https://gh.api.99988866.xyz/
+GH_PROXY="https://mirror.ghproxy.com/"
+
 # download file
 download() {
     case $1 in
     core)
+        # 获取版本号时，API 请求通常不需要镜像，但如果 API 也卡，可以考虑加上
         [[ ! $is_core_ver ]] && is_core_ver=$(_wget -qO- "https://api.github.com/repos/${is_core_repo}/releases/latest?v=$RANDOM" | grep tag_name | grep -E -o 'v([0-9.]+)')
         [[ $is_core_ver ]] && link="https://github.com/${is_core_repo}/releases/download/${is_core_ver}/${is_core}-${is_core_ver:1}-linux-${is_arch}.tar.gz"
         name=$is_core_name
@@ -184,16 +189,23 @@ download() {
     esac
 
     [[ $link ]] && {
-        msg warn "下载 ${name} > ${link}"
-        # 使用 curl 替换 wget
-        # -L: 跟随重定向 (GitHub 链接必备)
-        # -#: 显示直线进度条 (比默认的更简洁)
-        # --retry 3: 失败重试3次
-        # --connect-timeout 10: 连接超时10秒，防止卡死
-        if curl -L -# --retry 3 --connect-timeout 10 "$link" -o "$tmpfile"; then
+        # 核心修改：在下载链接前加上镜像前缀
+        local download_url="${GH_PROXY}${link}"
+        
+        msg warn "正在通过镜像下载 ${name}..."
+        msg info "链接: ${download_url}"
+
+        # 使用 curl 进行下载：
+        # -L: 跟随重定向
+        # -#: 显示进度条
+        # --connect-timeout: 连接超时设为 15 秒
+        # --retry: 失败自动重试 3 次
+        if curl -L -# --connect-timeout 15 --retry 3 "$download_url" -o "$tmpfile"; then
             mv -f "$tmpfile" "$is_ok"
+            msg info "${name} 下载成功！"
         else
-            msg error "下载 ${name} 失败，请检查网络连接。"
+            msg error "${name} 下载失败，请检查镜像站是否可用或网络环境。"
+            return 1
         fi
     }
 }
