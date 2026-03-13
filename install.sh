@@ -161,7 +161,7 @@ install_pkg() {
 
 # 定义镜像站前缀，如果失效可以随时更换
 # 常用镜像：https://mirror.ghproxy.com/ 或 https://gh.api.99988866.xyz/
-GH_PROXY="https://mirror.ghproxy.com/"
+GH_PROXY="https://ghproxy.net/"
 
 # download file
 download() {
