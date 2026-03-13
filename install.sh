@@ -185,8 +185,15 @@ download() {
 
     [[ $link ]] && {
         msg warn "下载 ${name} > ${link}"
-        if _wget -t 3 -q -c $link -O $tmpfile; then
-            mv -f $tmpfile $is_ok
+        # 使用 curl 替换 wget
+        # -L: 跟随重定向 (GitHub 链接必备)
+        # -#: 显示直线进度条 (比默认的更简洁)
+        # --retry 3: 失败重试3次
+        # --connect-timeout 10: 连接超时10秒，防止卡死
+        if curl -L -# --retry 3 --connect-timeout 10 "$link" -o "$tmpfile"; then
+            mv -f "$tmpfile" "$is_ok"
+        else
+            msg error "下载 ${name} 失败，请检查网络连接。"
         fi
     }
 }
