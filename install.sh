@@ -69,7 +69,7 @@ is_log_dir=/var/log/$is_core
 is_sh_bin=/usr/local/bin/$is_core
 is_sh_dir=$is_core_dir/sh
 is_sh_repo=$author/$is_core
-is_pkg="wget tar"
+is_pkg="wget tar curl jq"
 is_config_json=$is_core_dir/config.json
 tmp_var_lists=(
     tmpcore
@@ -159,16 +159,14 @@ install_pkg() {
     fi
 }
 
-# 定义镜像站前缀，如果失效可以随时更换
-# 常用镜像：https://mirror.ghproxy.com/ 或 https://gh.api.99988866.xyz/
-GH_PROXY="https://gh.ddlc.top/"
+# 定义镜像站前缀
+GH_PROXY="https://gh.api.99988866.xyz/"
 
 # download file
 download() {
     case $1 in
     core)
-        # 获取版本号时，API 请求通常不需要镜像，但如果 API 也卡，可以考虑加上
-        [[ ! $is_core_ver ]] && is_core_ver=$(_wget -qO- "https://api.github.com/repos/${is_core_repo}/releases/latest?v=$RANDOM" | grep tag_name | grep -E -o 'v([0-9.]+)')
+        [[ ! $is_core_ver ]] && is_core_ver=$(curl -sL --connect-timeout 10 "https://api.github.com/repos/${is_core_repo}/releases/latest?v=$RANDOM" | grep '"tag_name":' | grep -E -o 'v([0-9.]+)')
         [[ $is_core_ver ]] && link="https://github.com/${is_core_repo}/releases/download/${is_core_ver}/${is_core}-${is_core_ver:1}-linux-${is_arch}.tar.gz"
         name=$is_core_name
         tmpfile=$tmpcore
@@ -189,23 +187,20 @@ download() {
     esac
 
     [[ $link ]] && {
-        # 核心修改：在下载链接前加上镜像前缀
         local download_url="${GH_PROXY}${link}"
-        
         msg warn "正在通过镜像下载 ${name}..."
-        msg info "链接: ${download_url}"
 
-        # 使用 curl 进行下载：
-        # -L: 跟随重定向
-        # -#: 显示进度条
-        # --connect-timeout: 连接超时设为 15 秒
-        # --retry: 失败自动重试 3 次
-        if curl -L -# --connect-timeout 15 --retry 3 "$download_url" -o "$tmpfile"; then
+        # 使用 curl -f 遇到错误网页直接阻断，防止下成假文件
+        if curl -fL -# --connect-timeout 15 --retry 3 "$download_url" -o "$tmpfile"; then
             mv -f "$tmpfile" "$is_ok"
-            msg info "${name} 下载成功！"
         else
-            msg error "${name} 下载失败，请检查镜像站是否可用或网络环境。"
-            return 1
+            msg err "${name} 镜像站下载失败，尝试通过原站直连下载..."
+            if curl -fL -# --connect-timeout 20 --retry 3 "$link" -o "$tmpfile"; then
+                mv -f "$tmpfile" "$is_ok"
+            else
+                msg err "${name} 彻底下载失败，请检查网络环境！"
+                return 1
+            fi
         fi
     }
 }
@@ -242,9 +237,10 @@ check_status() {
     else
         [[ ! $is_fail ]] && {
             is_wget=1
-            [[ ! $is_core_file ]] && download core &
-            [[ ! $local_install ]] && download sh &
-            [[ $jq_not_found ]] && download jq &
+            # 取消这里的 & 后台符号，让下载排队进行，进度条更清晰
+            [[ ! $is_core_file ]] && download core
+            [[ ! $local_install ]] && download sh
+            [[ $jq_not_found ]] && download jq
             get_ip
             wait
             check_status
@@ -286,173 +282,3 @@ pass_args() {
             ;;
         -v | --core-version)
             [[ -z $2 ]] && {
-                err "($1) 缺少必需参数, 正确使用示例: [$1 v1.8.13]"
-            }
-            is_core_ver=v${2//v/}
-            shift 2
-            ;;
-        -h | --help)
-            show_help
-            ;;
-        *)
-            echo -e "\n${is_err} ($@) 为未知参数...\n"
-            show_help
-            ;;
-        esac
-    done
-    [[ $is_core_ver && $is_core_file ]] && {
-        err "无法同时自定义 ${is_core_name} 版本和 ${is_core_name} 文件."
-    }
-}
-
-# exit and remove tmpdir
-exit_and_del_tmpdir() {
-    rm -rf $tmpdir
-    [[ ! $1 ]] && {
-        msg err "哦豁.."
-        msg err "安装过程出现错误..."
-        echo -e "反馈问题) https://github.com/${is_sh_repo}/issues"
-        echo
-        exit 1
-    }
-    exit
-}
-
-# main
-main() {
-
-    # check old version
-    [[ -f $is_sh_bin && -d $is_core_dir/bin && -d $is_sh_dir && -d $is_conf_dir ]] && {
-        err "检测到脚本已安装, 如需重装请使用${green} ${is_core} reinstall ${none}命令."
-    }
-
-    # check parameters
-    [[ $# -gt 0 ]] && pass_args $@
-
-    # show welcome msg
-    clear
-    echo
-    echo "........... $is_core_name script by $author .........."
-    echo
-
-    # start installing...
-    msg warn "开始安装..."
-    [[ $is_core_ver ]] && msg warn "${is_core_name} 版本: ${yellow}$is_core_ver${none}"
-    [[ $proxy ]] && msg warn "使用代理: ${yellow}$proxy${none}"
-    # create tmpdir
-    mkdir -p $tmpdir
-    # if is_core_file, copy file
-    [[ $is_core_file ]] && {
-        cp -f $is_core_file $is_core_ok
-        msg warn "${yellow}${is_core_name} 文件使用 > $is_core_file${none}"
-    }
-    # local dir install sh script
-    [[ $local_install ]] && {
-        >$is_sh_ok
-        msg warn "${yellow}本地获取安装脚本 > $PWD ${none}"
-    }
-
-    timedatectl set-ntp true &>/dev/null
-    [[ $? != 0 ]] && {
-        is_ntp_on=1
-    }
-
-    # install dependent pkg
-    install_pkg $is_pkg &
-
-    # jq
-    if [[ $(type -P jq) ]]; then
-        >$is_jq_ok
-    else
-        jq_not_found=1
-    fi
-    # if wget installed. download core, sh, jq, get ip
-    [[ $is_wget ]] && {
-        [[ ! $is_core_file ]] && download core &
-        [[ ! $local_install ]] && download sh &
-        [[ $jq_not_found ]] && download jq &
-        get_ip
-    }
-
-    # waiting for background tasks is done
-    wait
-
-    # check background tasks status
-    check_status
-
-    # test $is_core_file
-    if [[ $is_core_file ]]; then
-        mkdir -p $tmpdir/testzip
-        tar zxf $is_core_ok --strip-components 1 -C $tmpdir/testzip &>/dev/null
-        [[ $? != 0 ]] && {
-            msg err "${is_core_name} 文件无法通过测试."
-            exit_and_del_tmpdir
-        }
-        [[ ! -f $tmpdir/testzip/$is_core ]] && {
-            msg err "${is_core_name} 文件无法通过测试."
-            exit_and_del_tmpdir
-        }
-    fi
-
-    # get server ip.
-    [[ ! $ip ]] && {
-        msg err "获取服务器 IP 失败."
-        exit_and_del_tmpdir
-    }
-
-    # create sh dir...
-    mkdir -p $is_sh_dir
-
-    # copy sh file or unzip sh zip file.
-    if [[ $local_install ]]; then
-        cp -rf $PWD/* $is_sh_dir
-    else
-        tar zxf $is_sh_ok -C $is_sh_dir
-    fi
-
-    # create core bin dir
-    mkdir -p $is_core_dir/bin
-    # copy core file or unzip core zip file
-    if [[ $is_core_file ]]; then
-        cp -rf $tmpdir/testzip/* $is_core_dir/bin
-    else
-        tar zxf $is_core_ok --strip-components 1 -C $is_core_dir/bin
-    fi
-
-    # add alias
-    echo "alias sb=$is_sh_bin" >>/root/.bashrc
-    echo "alias $is_core=$is_sh_bin" >>/root/.bashrc
-
-    # core command
-    ln -sf $is_sh_dir/$is_core.sh $is_sh_bin
-    ln -sf $is_sh_dir/$is_core.sh ${is_sh_bin/$is_core/sb}
-
-    # jq
-    [[ $jq_not_found ]] && mv -f $is_jq_ok /usr/bin/jq
-
-    # chmod
-    chmod +x $is_core_bin $is_sh_bin /usr/bin/jq ${is_sh_bin/$is_core/sb}
-
-    # create log dir
-    mkdir -p $is_log_dir
-
-    # show a tips msg
-    msg ok "生成配置文件..."
-
-    # create systemd service
-    load systemd.sh
-    is_new_install=1
-    install_service $is_core &>/dev/null
-
-    # create condf dir
-    mkdir -p $is_conf_dir
-
-    load core.sh
-    # create a reality config
-    add reality
-    # remove tmp dir and exit.
-    exit_and_del_tmpdir ok
-}
-
-# start.
-main $@
